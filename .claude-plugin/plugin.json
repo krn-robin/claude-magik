@@ -1,0 +1,8 @@
+{
+    "name": "claude-magik",
+    "description": "Claude Code skills and plugins for Magik development",
+    "version": "0.0.0",
+    "author": {
+	"name": "Robin Putters"
+    }
+}

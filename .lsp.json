@@ -1,0 +1,37 @@
+{
+  "magik": {
+    "command": "java",
+    "args": ["-jar", "magik-language-server-0.11.0.jar", "--debug"],
+    "extensionToLanguage": {
+      ".magik": "magik",
+      ".def": "sw-product-def"
+    },
+    "settings": {
+      "magik": {
+	"productDirs": [],
+	"lint": {
+	  "overrideConfigFile": null
+	},
+	"typing": {
+	  "typeDatabasePaths": [],
+	  "showTypingInlayHints": false,
+	  "showArgumentInlayHints": false,
+	  "enableChecks": false,
+	  "indexGlobalUsages": true,
+	  "indexMethodUsages": false,
+	  "indexSlotUsages": true,
+	  "indexConditionUsages": true,
+	  "cacheIndexedDefinitions": true
+	},
+	"formatting": {
+	  "indentChar": "space",
+	  "indentWidth": 2,
+	  "insertFinalNewline": true,
+	  "trimTrailingWhitespace": true,
+	  "trimFinalNewlines": true,
+	  "indentStrategy": "null"
+	}
+      }
+    }
+  }
+}
