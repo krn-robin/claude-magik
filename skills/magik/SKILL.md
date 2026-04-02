@@ -753,7 +753,7 @@ result << my_obj.get_collection().elements().size
 
 ### Loading Code Dynamically
 ```magik
-magik_rep.load_chunck(some_string.read_stream())
+magik_rep.load_chunk(some_string.read_stream())
 ```
 
 ---
@@ -786,7 +786,7 @@ magik_rep.load_chunck(some_string.read_stream())
 - **IDEs:** MDT (Eclipse-based), VS Code with `smallworld-magik-vscode` extension (Systemap)
 - **Language Server / Linter:** `magik-tools` by StevenLooman (GitHub); see also the `magik-lsp` plugin in this repository (`plugins/magik-lsp/`) for Claude Code integration
 - **REPL:** The Magik prompt inside a running Smallworld session
-- **Compilation:** F9 (compile buffer), F2-b, or `magik_rep.load_chunck()`
+- **Compilation:** F9 (compile buffer), F2-b, or `magik_rep.load_chunk()`
 - **Session start (SW5):** `gis_aliases` file via `F2-z` in VS Code extension
 
 ---
