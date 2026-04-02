@@ -1,4 +1,4 @@
-# claude-skills
+# claude-magik
 
 Claude Code skills and plugins for Magik development.
 
@@ -24,10 +24,10 @@ The skill gives Claude deep knowledge of Magik: syntax, naming conventions, coll
 
 ```bash
 # Clone this repo (or your fork)
-git clone https://github.com/robin-putters/claude-skills.git
+git clone https://github.com/krn-robin/claude-magik.git
 
 # Copy the skill into Claude's user skills directory
-cp -r claude-skills/skills/magik ~/.claude/skills/magik
+cp -r claude-magik/skills/magik ~/.claude/skills/magik
 ```
 
 Claude Code will pick up the new skill automatically — no restart needed.
@@ -114,7 +114,7 @@ For type checking and symbol resolution to work, add your Smallworld product dir
 ## Updating
 
 ```bash
-cd claude-skills
+cd claude-magik
 git pull
 cp -r skills/magik ~/.claude/skills/magik
 ```
