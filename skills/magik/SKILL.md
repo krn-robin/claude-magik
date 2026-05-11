@@ -21,7 +21,6 @@ Magik is a dynamically typed, object-oriented programming language built for Sma
 ```magik
 a << 1.234         # "a becomes 1.234"
 b +<< a            # b << b + a  (compound assignment)
-c << "foo" + "bar" # string concatenation
 ```
 **Never use `=` for assignment.** `=` is equality comparison only.
 
@@ -81,7 +80,13 @@ Methods returning a Kleenean result are named with `??` suffix (e.g. `inside??()
 
 Logical operators:
 ```magik
-_and   _or   _not   _xor
+_and    _or    _not    _xor          # always evaluate both sides
+_andif  _orif  _xorif                # short-circuit — skip RHS if LHS decides the result
+```
+
+Use the short-circuit forms whenever the RHS depends on the LHS being safe, e.g. a null-check before a method call:
+```magik
+_if x _isnt _unset _andif x.valid? _then ... _endif
 ```
 
 ---
@@ -181,6 +186,13 @@ _if a _is _unset _then write("a is null") _endif
 _if a = b _then write("a equals b") _endif
 ```
 
+**Formatting:** In a multi-line `_if`, place a newline after each `_then`, `_else`, `_and`, `_or`, `_andif`, `_orif`, `_xorif`.
+
+**Expression form / method chaining:** `_if` can be used as an expression and a method called directly on `_endif`:
+```magik
+result << _if cond _then >> a _else >> b _endif.write_string
+```
+
 ---
 
 ## Loops
@@ -225,12 +237,109 @@ _endproc
 x << my_procedure(1, 2, 3)   # x = 6
 ```
 
-Use `>>` as a short form of `_return`:
+`>>` sets the value of its enclosing code block. **It is not a short form of `_return`**: `>>` is positionally restricted — it must be the *last statement* of its block, and there is at most one per block. The block's value flows outward; it becomes the method's result only when the block in question is the method body itself. `_return val`, by contrast, is unrelated to block structure: it exits the enclosing method or procedure immediately, cutting through any nested `_if` / `_block` / `_loop`.
+
 ```magik
-my_proc << _proc(x)
-    >> x * 2
-_endproc
+_pragma(classify_level=basic)
+_method my_obj.classify(x)
+    ## Returns a label for X.
+    _local label << _if x > 0
+                    _then
+                        >> "positive"       # value of the _then arm; the _if evaluates to this
+                    _else
+                        >> "non-positive"   # value of the _else arm
+                    _endif
+
+    _if x.is_nan?() _is _true
+    _then
+        _return "not a number"              # immediate exit — skips everything below
+    _endif
+
+    >> label                                # last statement of the method body — method's result
+_endmethod
+$
 ```
+
+Use `>>` when the result falls out naturally at the end of a block; use `_return` to exit a method early from anywhere inside it.
+
+---
+
+## Multiple Return Values
+
+A method or procedure can yield a tuple of values — either as the final `>>` of its body, or via an early `_return`:
+
+```magik
+_method my_obj.split_name(full)
+    ## Splits FULL into first and last. Returns first, last.
+    _local idx << full.index_of(% )
+    >> full.slice(1, idx - 1), full.slice(idx + 1)
+_endmethod
+$
+```
+
+The caller has three ways to consume a multi-valued return:
+
+```magik
+# 1. Take the first value, drop the rest
+first << obj.split_name("Ada Lovelace")
+
+# 2. _scatter — spread the tuple into positional locals on the LHS
+(first, last) << (_scatter obj.split_name("Ada Lovelace"))
+
+# 3. _allresults — collect the whole tuple into a simple_vector
+parts << _allresults obj.split_name("Ada Lovelace")   # → {"Ada", "Lovelace"}
+```
+
+`_scatter` also works in the other direction — spread a vector into positional arguments of a call:
+```magik
+args << {1, 2, 3}
+obj.configure(_scatter args)    # same as obj.configure(1, 2, 3)
+```
+
+---
+
+## Named Blocks (`_block` / `_endblock`)
+
+A `_block` is a scoped expression — it evaluates to whatever its `>>` returns and lets you introduce locals without writing a procedure. Often useful when you need a short inline computation with a few intermediate variables:
+
+```magik
+result << _block
+    _local tmp << compute_something()
+    _local clean << tmp.normalised
+    >> clean
+_endblock
+```
+
+Unlike a `_proc`, a block runs immediately; there is no separate invocation step. Use `_leave` to exit early from a block.
+
+---
+
+## Thread Synchronisation (`_lock` / `_endlock`)
+
+Acquires the monitor on an object for the duration of the block — only one thread at a time can hold it. Required when mutating shared state in Smallworld 5, which is heavily multithreaded.
+
+```magik
+_lock my_obj
+    my_obj.counter +<< 1
+    my_obj.last_updated << date_time_now()
+_endlock
+```
+
+Lock on the object whose invariants you are protecting — typically `_self`. Keep lock bodies short; long-held locks are a common source of contention. Pair with `concurrent_hash_map` where possible to avoid locking entirely.
+
+---
+
+## Thread-Local Access (`_thisthread`)
+
+`_thisthread` is the currently executing thread object. Common uses:
+
+```magik
+_thisthread.sleep(100)           # block this thread for 100 ms
+_thisthread.as_oop               # integer unique to this thread — handy as a map key
+_thisthread.vm_priority          # current priority; e.g. spawn child at priority-1
+```
+
+Treat `_thisthread` as the entry point for thread-local state and scheduling. Do not cache it across method calls — always re-read.
 
 ---
 
@@ -246,8 +355,27 @@ def_slotted_exemplar(
         {:slot_a, _unset},
         {:slot_b, "default_value"}
     },
-    {:parent_exemplar_a, :parent_exemplar_b}  # inheritance list
+    {@user:parent_exemplar_a, @user:parent_exemplar_b}  # inheritance list
 )
+$
+```
+
+### Namespace prefixes in exemplar names
+
+Exemplar symbols carry a short prefix that tells you where and how they may be used:
+
+- **Package-qualified — `pkg:name`.** A colon separates a package identifier from the exemplar name. `sw:rope`, `sw:property_list`, `user:my_demo`. Use this form for any public cross-package reference.
+- **Package-private — `xx!name`.** An exemplar whose name contains `!` is package-private. Only code within the same package should reference it. The owning package is free to rename or remove `!`-named exemplars without notice, so external code must never depend on them.
+
+This parallels the `!`-in-method-name rule: `!` in an identifier is always a "don't rely on this from outside" marker, whether the identifier is a method or an exemplar.
+
+```magik
+# Fine — same-package reference to a package-private exemplar
+sw:def_slotted_exemplar(:my_thing, {}, {@user:internal!base_thing})
+$
+
+# Also fine — public package-qualified reference
+sw:def_slotted_exemplar(:my_thing, {}, {@sw:rope})
 $
 ```
 
@@ -292,7 +420,7 @@ my_object.define_shared_constant(:my_const, 42, :public)
 $
 
 # Use :private for internal constants:
-my_object.define_shared_constant(:int!default_size, 16, :private)
+my_object.define_shared_constant(:default_size, 16, :private)
 $
 ```
 
@@ -310,11 +438,26 @@ _endmethod
 $
 ```
 
-Valid classify levels: `basic`, `advanced`, `restricted`.
+Valid `classify_level` values: `basic`, `advanced`, `restricted`, `debug`.
 
 - Public API methods: `basic` or `advanced`
-- Internal/non-public methods that are still publicly callable: `restricted`, and the method name **must** start with `int!`
+- Internal/non-public methods that are still publicly callable: `restricted`, and the method name **must** contain `!` — typically as a short prefix like `int!foo()`, `sw!foo()`, or `krn!foo()`
 - Private methods (`_private`): `restricted`
+- Methods intended only for live debugging / REPL inspection: `debug` — these should not be called from production code
+
+**Additional pragma keys:**
+- `topic={name}` — single topic; `topic={a,b}` or the plural `topics={a,b}` — multiple topics. Always use the braced form for consistency, even for a single topic. Example topic: `{code}` — use for methods that perform code generation.
+- `usage={subclassable}` — this method or exemplar is explicitly designed to be overridden.
+- `usage={external}` — this method is callable from outside the declaring module. Absence of `usage={external}` does **not** automatically make a method internal-only; it is a positive marker on the module API surface.
+
+Example combining several keys:
+```magik
+_pragma(classify_level=advanced, topic={my_topic}, usage={subclassable})
+_method my_base.handle(event)
+    ## Override to handle EVENT. Returns _unset by default.
+_endmethod
+$
+```
 
 ```magik
 _pragma(classify_level=restricted)
@@ -332,16 +475,6 @@ _endmethod
 $
 ```
 
-Use `topic={code}` for methods that generate bytecode or perform code generation:
-```magik
-_pragma(classify_level=advanced, topic={code})
-_method my_object.define_dynamic_method()
-    ##
-    # ...
-_endmethod
-$
-```
-
 ### Method Documentation
 
 Every `_method` definition must include a `##` docstring immediately after the method signature (even if empty). Documentation rules:
@@ -353,39 +486,17 @@ _pragma(classify_level=basic)
 _method my_object.greet(_optional name)
     ## Greets the user by NAME.
     ## If NAME is not given, defaults to "World".
-    ## Returns _unset.
-    _if name _is _unset
-    _then
-        name << "World"
-    _endif
-    write("Hello, ", name)
+
+    write("Hello, ", name.default("World"))
 _endmethod
 $
 ```
 
 ### Private Methods
-```magik
-_pragma(classify_level=restricted)
-_private _method my_object.internal_helper()
-    ## Internal helper — not part of the public API.
-    >> .slot_a * 2
-_endmethod
-$
-```
+Prefix with `_private` and always pair with `_pragma(classify_level=restricted)`. Private methods can only be called from within the same exemplar.
 
 ### Optional Parameters
-```magik
-_pragma(classify_level=basic)
-_method my_object.greet(_optional name)
-    ## Greets the user by NAME (defaults to "World").
-    _if name _is _unset
-    _then
-        name << "World"
-    _endif
-    write("Hello, ", name)
-_endmethod
-$
-```
+Mark trailing parameters with `_optional`; they default to `_unset` when the caller omits them. See the `greet` example under *Method Documentation*.
 
 ### Variadic Parameters
 ```magik
@@ -398,6 +509,28 @@ _method my_object.sum(_gather values)
         total +<< v
     _endloop
     >> total
+_endmethod
+$
+```
+
+### Abstract Methods
+
+Two idioms coexist for "this must be overridden by a subclass."
+
+**The `_abstract` keyword** — compile-time marker, body is empty:
+```magik
+_pragma(classify_level=restricted)
+_abstract _method my_base.do_the_thing(arg)
+_endmethod
+$
+```
+
+**The raise-based form** — runtime check; common in mixins, lets you attach a docstring and produces a clear error if a concrete subclass forgets to override:
+```magik
+_pragma(classify_level=restricted)
+_method my_base.do_the_thing
+    ## Subclasses must override. Returns the thing.
+    >> condition.raise(:subclass_should_implement, :name, "do_the_thing", :class, _self)
 _endmethod
 $
 ```
@@ -419,9 +552,56 @@ _endmethod
 $
 
 # Use in an exemplar:
-sw:def_slotted_exemplar(:my_class, {}, {:my_mixin})
+sw:def_slotted_exemplar(:my_class, {}, {@user:my_mixin})
 $
 ```
+
+Mixins can themselves inherit from other mixins. Pass a vector of `@`-prefixed exemplar-globals as the second argument — the same shape that `def_slotted_exemplar` uses for its parents list:
+
+```magik
+sw:def_mixin(:rope_mixin,
+  {@sw:stretchy_indexed_collection_mixin,
+   @sw:slotted_format_mixin,
+   @sw:serial_structure_indexed_mixin})
+$
+```
+
+Equivalent legacy forms still found in `sw_core` (use bare symbols rather than `@`-refs and don't survive exemplar reload as cleanly — prefer the `@` form for new code):
+
+```magik
+def_mixin(:range_map_mixin, {:keys_and_elements_mixin, :basic_collection_mixin})
+def_mixin(:editable_dataset_mixin, :dataset_notification_mixin)  # single parent, no braces
+```
+
+---
+
+## Metaprogramming
+
+### Retiring a method (`remove_method`)
+
+Used in database-upgrade and migration scripts to drop a method whose behaviour has moved elsewhere. Do **not** reach for this during ordinary development — it is a schema-evolution tool and will break any caller that still expects the method to exist.
+
+```magik
+my_mixin.remove_method(:modified?)
+$
+```
+
+### Dynamic dispatch (`perform`)
+
+Sends a message whose name is computed at runtime. The method name is passed as a symbol — use the symbol-bar form `:|name()|` to include the brackets for a bracketed method, or a bare symbol for a slot-like one:
+
+```magik
+# Slot-like method (no brackets)
+my_obj.perform(:colour)
+
+# Bracketed method with arguments
+my_obj.perform(:|handle_event()|, event, priority)
+
+# Method name built from a string at runtime
+obj.perform(method_name.as_symbol())
+```
+
+**Do not use `sys!perform`.** Any method whose name contains `!` is internal — external callers should always go through the public `perform`.
 
 ---
 
@@ -475,10 +655,37 @@ _when error
 _endtry
 ```
 
-Raise a condition:
+Install a handler for the enclosing scope with `_handling ... _with` — no block nesting required:
 ```magik
-sw:condition.raise(:my_error, :string, "Something went wrong")
+_handling information _with procedure      # suppress information-level conditions
+_handling error _with _proc(c) log_it(c) _endproc
+# ... subsequent code in this scope is protected by the handler above ...
 ```
+The handler is a procedure (or the bare word `procedure`, which is the default "do nothing" handler). Use this form when you want a blanket handler for a long method body without indenting everything inside a `_try` block.
+
+### Conditions
+
+**Raise** a condition by name with keyword/value pairs carrying the details:
+```magik
+condition.raise(:my_error, :string, "Something went wrong")
+condition.raise(:invalid_argument, :name, "size", :value, given_size)
+```
+
+**Define a new condition type** with a parent and a vector of slot names. Slots hold the context that handlers and formatters pull out with `.get_value(:slot)`:
+```magik
+condition.define_condition(:my_processing_error, :error, {:code, :detail})
+$
+
+condition.define_condition(:my_user_error, :user_error, {:detail})
+$
+```
+Chain by pointing at your own condition as the parent to build a hierarchy (handlers catch the parent and everything below it).
+
+**Standard parent conditions:**
+- `:error` — unrecoverable internal error; surfaces as a traceback if uncaught.
+- `:user_error` — recoverable, for messages aimed at end users.
+- `:warning` — non-fatal; default handler writes to the output and continues.
+- `:information` — informational; default handler is silent unless a handler is installed.
 
 **Always wrap production code in error handling.** End users must never see raw tracebacks.
 
@@ -680,11 +887,23 @@ Magik's core libraries use British English. Always use:
 
 ---
 
+## File Header
+
+Every `.magik` file starts with two directive lines:
+```magik
+#% text_encoding = utf8
+_package sw
+```
+- `#% text_encoding = ...` tells the compiler how to decode the file. **Prefer `utf8` for new files.** Legacy files often declare `iso8859_1`; leave an existing file's encoding alone unless you are re-saving it in the new encoding.
+- `_package sw` is the default for production code. `_package user` is reserved for examples, tests, and transient exemplars. Only these two packages appear in practice.
+
+---
+
 ## File Structure & Chunk Terminator
 
 Each top-level statement or definition in a `.magik` file must end with `$` on its own line:
 ```magik
-def_slotted_exemplar(:my_obj, {}, {})
+sw:def_slotted_exemplar(:my_obj, {}, {})
 $
 
 _pragma(classify_level=basic)
@@ -704,6 +923,8 @@ In the REPL prompt, `$` submits the block. In files, it acts as a statement deli
 ### Integer
 ```magik
 n << 42
+n.incremented       # n + 1 (prefer over n + 1)
+n.decremented       # n - 1 (prefer over n - 1)
 n.shift(3)          # n * 2^3 (bit shift)
 n.factorial()       # n!
 n.power2()          # smallest power of 2 >= n
@@ -738,12 +959,14 @@ ds_environment        # database environment
 smallworld_product    # product info
 ```
 
-### Checking for Unset Before Use
+### Checking for Unset Before Use / Default Value Assignment
 ```magik
-_if .my_slot _isnt _unset
-_then
-    .my_slot.do_something()
-_endif
+_if .my_slot _isnt _unset _then .my_slot.do_something() _endif
+
+# Prefer the shorthand for default assignment:
+var << var.default(_true)
+# Over the verbose form:
+# var << _if var _isnt _unset _then >> var _else >> _true _endif
 ```
 
 ### Method Chaining / Message Passing
@@ -760,21 +983,19 @@ magik_rep.load_chunk(some_string.read_stream())
 
 ## Anti-Patterns to Avoid
 
-- **Never use `=` for assignment** — it's comparison only; use `<<`
-- **Never use `true`/`false`** — always `_true`/`_false`
-- **Never use `null`/`nil`** — always `_unset`
 - **Don't use camelCase** — use `snake_case` with underscores
 - **Don't use type-prefix naming** (e.g., `strName`, `intCount`) — use descriptive names like `first_name`, `item_count`
 - **Don't use `_global` casually** — globals pollute the namespace; prefer locals and passed arguments
 - **Don't leave production code without error handling** — always protect against tracebacks reaching the end user
 - **Don't use `hash_table` in Smallworld 5 when not needed** — prefer `concurrent_hash_map` for performance and thread safety; use `property_list` only when insertion order matters
 - **Don't concatenate strings with `+`** — use `sw:write_string(a, b, c)` instead
-- **Don't access slots directly outside `init()` and accessor methods** — always go through `define_slot_access`-generated accessors
+- **Don't access slots directly outside `init()` and accessor methods** — always go through `define_slot_access`-generated accessors; use `_self.x` not `.x` (direct slot syntax is only valid inside `init()` and accessor implementations)
 - **Don't define class constants inside method bodies** — use `define_shared_constant()`
 - **Don't leave `_protection` blocks empty** when a resource must be closed — an empty `_protection` block is a bug
 - **Don't confuse `empty?` and `empty()`** — `empty?` tests emptiness; `empty()` clears the collection
+- **Don't use `col.size > 0` to test non-emptiness** — use `col.empty?.not`; likewise use `col.size.zero?` over `col.size = 0`
+- **Use `boolean?.not` not `_not boolean?`** — the method form is idiomatic Magik
 - **Don't use string concatenation for file paths** — use `sw:system.pathname_down()` and related utilities
-- **Don't define multiple `init()` methods** — a single initialisation entry point makes subclassing far simpler
 - **Don't use `!name!` naming for globals** — the `!name!` convention is reserved for dynamic (thread-local) variables
 - **Don't define methods with brackets just because they are slow** — if the behaviour is slot-like, leave out the brackets and document the cost instead
 - **Don't link related classes via globals** — use `define_shared_constant()` to hold a reference to the related exemplar
@@ -788,6 +1009,36 @@ magik_rep.load_chunk(some_string.read_stream())
 - **REPL:** The Magik prompt inside a running Smallworld session
 - **Compilation:** F9 (compile buffer), F2-b, or `magik_rep.load_chunk()`
 - **Session start (SW5):** `gis_aliases` file via `F2-z` in VS Code extension
+- **Type index:** `magik-tools` can emit a `types.jsonl` file — one JSON object per exemplar/mixin with `sort`, `type_name`, `slots`, `parents`, `pragma`, `location`, and `doc`. Useful as a grep-target when locating definitions across a large codebase.
+
+---
+
+## Module & Product Layout
+
+Smallworld code is organised into **products** that contain **modules**. A typical on-disk layout:
+
+```
+my_product/
+  product.def                     # product metadata
+  modules/
+    my_module/
+      module.def                  # module metadata + dependency list
+      source/
+        load_list.txt             # ordered list of files to load
+        my_exemplar.magik
+        my_methods.magik
+      message_usages.magik        # optional — wires this module's message handler
+```
+
+- **`product.def` / `module.def`** declare metadata (name, version, prerequisites). They are plain-text Smallworld definition files — not Magik code.
+- **`load_list.txt`** is the manifest the session uses to load the module. Entries are **file stems without the `.magik` extension**, one per line. A line may also name a subdirectory that contains its own `load_list.txt` for nested grouping. Order matters — definitions must load before code that references them.
+- **`message_usages.magik`** connects a module's message handler to upstream message categories, e.g.:
+  ```magik
+  message_handler(:my_handler).set_uses_list({:parent_category})
+  $
+  ```
+
+When adding a new `.magik` file to a module, **you must also add its stem to the appropriate `load_list.txt`** or the file will not be loaded.
 
 ---
 
@@ -802,13 +1053,31 @@ Not equal:         a ~= b
 Boolean:           _true  _false  _maybe (Kleenean)
 Null:              _unset
 Self:              _self
-Return:            _return val   or   >> val
+Early return:      _return val   (immediate exit from method/proc, any depth)
+Block result:      >> val         (final statement of current block — sets the block's value)
 New instance:      my_exemplar.new(...)  →  internally _clone.init(...)
 Slot access:       .slot_name  (only in init/accessors)
 Slot accessors:    my_obj.define_slot_access(:slot, :writable, :public)
 Shared constant:   my_obj.define_shared_constant(:name, value, :public)
 Private method:    _private _method ...
-Internal-public:   _method my_obj.int!name()  (classify_level=restricted)
+Internal-public:   _method my_obj.int!name() / sw!name()  (any `!`-containing name, classify_level=restricted)
+Abstract method:   _abstract _method ...    or    >> condition.raise(:subclass_should_implement, ...)
+Named block:       _block ... >> val _endblock
+Thread lock:       _lock obj ... _endlock
+Thread-local:      _thisthread.sleep(ms)
+Short-circuit:     _andif / _orif / _xorif
+Gather tuple:      parts << _allresults expr_with_multi_return
+Spread args:       obj.call(_scatter vec)
+Handler install:   _handling error _with _proc(c) ... _endproc
+Raise condition:   condition.raise(:name, :key, val)
+Define condition:  condition.define_condition(:name, :parent, {:slots})
+Dynamic send:      obj.perform(:|method()|, args)   (not sys!perform)
+Remove method:     my_exemplar.remove_method(:name)   (upgrade scripts only)
+File header:       #% text_encoding = utf8  /  _package sw
+Package-private:   xx!name in exemplar or method — do not reference from other packages
+Pragma usage:      usage={subclassable}  or  usage={external}
+Pragma topic:      always braced — topic={name}
+Debug classify:    classify_level=debug   (REPL-only, not for production callers)
 Optional param:    _optional param_name
 Varargs:           _gather param_name
 Iterator method:   _iter _method ... _loopbody(val) ...
@@ -823,4 +1092,5 @@ Non-slot method:   brackets — my_obj.calculate()
 Setter:            foo<<  (paired with slot-like getter foo)
 String concat:     sw:write_string(a, b, c)   (not a + b + c)
 Empty test:        col.empty?     (not col.empty() which clears!)
+Symbol parens:     :|my_method()|  (symbol form for a bracketed method name)
 ```
